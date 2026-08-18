@@ -60,6 +60,19 @@ class DebugSession(ABC):
     def step(self, mode: str = "into") -> StateSnapshot:
         """Single-step. mode: into | over | out."""
 
+    # -- Threads -----------------------------------------------------------
+    @abstractmethod
+    def thread_list(self) -> List[dict]:
+        """List threads: index (engine id), tid (OS), teb, pc, symbol."""
+
+    @abstractmethod
+    def set_thread(self, index: int) -> None:
+        """Switch the current thread by index (engine id)."""
+
+    @abstractmethod
+    def get_thread(self) -> int:
+        """Return the current thread index (engine id)."""
+
     # -- Observation / Event -----------------------------------------------
     @abstractmethod
     def wait_event(self, timeout: float = 10.0) -> dict:

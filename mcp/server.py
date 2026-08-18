@@ -109,6 +109,29 @@ def step(mode: str = "into") -> dict:
     return _session.step(mode).to_dict()
 
 
+# -- Threads ---------------------------------------------------------------
+@mcp.tool()
+@locked
+def thread_list() -> dict:
+    """List threads: index (engine id), tid (OS), teb, pc, symbol."""
+    return {"threads": _session.thread_list()}
+
+
+@mcp.tool()
+@locked
+def set_thread(index: int) -> dict:
+    """Switch the current thread by index (engine id)."""
+    _session.set_thread(int(index))
+    return {}
+
+
+@mcp.tool()
+@locked
+def get_thread() -> dict:
+    """Return the current thread index (engine id)."""
+    return {"index": _session.get_thread()}
+
+
 # -- Observation -----------------------------------------------------------
 @mcp.tool()
 @locked

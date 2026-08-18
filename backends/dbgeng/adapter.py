@@ -193,6 +193,39 @@ class DbgEngAdapter(DebugSession):
             self._dbg.stepi(1)
         return self._snapshot(False, 3, 3)
 
+    # -- Threads -----------------------------------------------------------
+    def thread_list(self) -> List[dict]:
+        threads: List[dict] = []
+        try:
+            ids, sysids = self._dbg._systems.GetThreadIdsByIndex()
+            curid = self._dbg._systems.GetCurrentThreadId()
+            for eid, sysid in zip(ids, sysids):
+                self._dbg._systems.SetCurrentThreadId(eid)
+                pc = int(self._dbg.reg.get_pc())
+                threads.append({
+                    "index": int(eid),
+                    "tid": int(sysid),
+                    "teb": hex(int(self._dbg._systems.GetCurrentThreadTeb())),
+                    "pc": hex(pc),
+                    "symbol": self._dbg.get_name_by_offset(pc),
+                })
+            self._dbg._systems.SetCurrentThreadId(curid)
+        except Exception as e:
+            raise BackendError(f"thread_list failed: {e}") from e
+        return threads
+
+    def set_thread(self, index: int) -> None:
+        try:
+            self._dbg._systems.SetCurrentThreadId(int(index))
+        except Exception as e:
+            raise BackendError(f"set_thread({index}) failed: {e}") from e
+
+    def get_thread(self) -> int:
+        try:
+            return int(self._dbg._systems.GetCurrentThreadId())
+        except Exception as e:
+            raise BackendError(f"get_thread failed: {e}") from e
+
     # -- Observation / Event -----------------------------------------------
     def wait_event(self, timeout: float = 10.0) -> dict:
         self._clear_event()
