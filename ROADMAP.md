@@ -204,14 +204,14 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 **AI-native 独有层**（区别于普通 debugger）：上下文预算意识（观察瘦身+按需）、结构化语义
 （stop_reason/异常分类而非 raw 数据）、可解释错误、确定性（snapshot/restore）、工具粒度策略。
 
-### P0 — exploit 调试刚需（下一步先做这个）
-- [x] **ROP gadget 查找器**：搜 `pop rdi; ret` 等 gadget（`find_gadget`）
-- [x] **内存搜索**：在目标内存搜字节/字符串（`search_memory`）
-- [ ] **stdin 输入**：`launch` 支持 stdin（现在只有 argv/文件，很多 CTF 题读 stdin）
-- [ ] **线程枚举/切换**：`thread_list`/`set_thread`（解锁 `threads_target` + 多线程目标）
+### P0 — exploit 调试刚需 ✅ 全部完成
+- [x] **ROP gadget 查找器**：`find_gadget`
+- [x] **内存搜索**：`search_memory`
+- [x] **stdin 输入**：`launch(stdin_data)`（headless 句柄重定向，实测 scanf 注入）
+- [x] **线程枚举/切换**：`thread_list`/`set_thread`/`get_thread`（已解锁 `threads_target`）
 
 ### P1 — benchmark 补全
-- [ ] 崩溃：`threads_target`（等线程枚举）
+- [ ] 崩溃：`threads_target` 样例已可用（线程枚举已就绪，待跑 benchmark）
 - [ ] exploit：格式化字符串→GOT 覆写、ROP 链（真 DEP 绕过）、UAF→任意写
 
 ### P2 — PRD 验证方法论收尾
