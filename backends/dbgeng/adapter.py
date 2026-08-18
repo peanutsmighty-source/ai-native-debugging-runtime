@@ -111,18 +111,33 @@ class DbgEngAdapter(DebugSession):
         self._last_event = {}
 
     # -- Session -----------------------------------------------------------
-    def launch(self, path: str, args: Optional[List[str]] = None) -> StateSnapshot:
+    def launch(self, path: str, args: Optional[List[str]] = None,
+               stdin_data: Optional[bytes] = None) -> StateSnapshot:
         self._target_path = os.path.abspath(path)
         self._target_args = args or []
         # Proper Win32 quoting (handles paths/args with spaces or metacharacters).
         cmdline = subprocess.list2cmdline([self._target_path] + self._target_args)
 
         self._clear_event()
-        # DETACHED_PROCESS (0x8) keeps the debuggee from inheriting our std
-        # handles, so its printf does not pollute the CLI/MCP stdio stream.
-        flags = DbgEng.DEBUG_ONLY_THIS_PROCESS | 0x8
+        if stdin_data is not None:
+            # Redirect the debuggee's stdin to a temp file and stdout/stderr to
+            # NUL via inheritable handles (headless-safe; input callbacks only
+            # work for console apps).
+            from .stdio_redirect import redirect_stdlib
+            restore = redirect_stdlib(stdin_data)
+            options = DbgEng._DEBUG_CREATE_PROCESS_OPTIONS()
+            options.CreateFlags = DbgEng.DEBUG_ONLY_THIS_PROCESS
+            options.EngCreateFlags = DbgEng.DEBUG_ECREATE_PROCESS_INHERIT_HANDLES
+            try:
+                self._dbg._client.CreateProcess2(cmdline, options, None, None)
+            finally:
+                restore()
+        else:
+            # DETACHED_PROCESS (0x8) keeps the debuggee from inheriting our std
+            # handles, so its printf does not pollute the CLI/MCP stdio stream.
+            flags = DbgEng.DEBUG_ONLY_THIS_PROCESS | 0x8
+            self._dbg._client.CreateProcess(cmdline, flags)
         self._initial_break_pending = True
-        self._dbg._client.CreateProcess(cmdline, flags)
         self._dbg._control.AddEngineOptions(DbgEng.DEBUG_ENGINITIAL_BREAK)
         self._dbg.wait(10)
         return self._snapshot(False, 0, 0, False)   # minimal: pid/status/pc/stop

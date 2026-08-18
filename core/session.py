@@ -24,8 +24,10 @@ class DebugSession(ABC):
 
     # -- Session -----------------------------------------------------------
     @abstractmethod
-    def launch(self, path: str, args: Optional[List[str]] = None) -> StateSnapshot:
-        """Create a process and stop at the initial breakpoint."""
+    def launch(self, path: str, args: Optional[List[str]] = None,
+               stdin_data: Optional[bytes] = None) -> StateSnapshot:
+        """Create a process and stop at the initial breakpoint. ``stdin_data``
+        (optional) feeds fixed bytes to the debuggee's stdin via input callbacks."""
 
     @abstractmethod
     def attach(self, pid: int) -> StateSnapshot:

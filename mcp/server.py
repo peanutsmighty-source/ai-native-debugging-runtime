@@ -52,9 +52,11 @@ def _addr(s) -> int:
 # -- Session ---------------------------------------------------------------
 @mcp.tool()
 @locked
-def launch(path: str, args: list = None) -> dict:
-    """Launch a Windows executable and stop at its initial breakpoint."""
-    return _session.launch(path, args or []).to_dict()
+def launch(path: str, args: list = None, stdin_hex: str = None) -> dict:
+    """Launch a Windows executable and stop at its initial breakpoint.
+    `stdin_hex` (optional) is hex bytes fed to the debuggee's stdin."""
+    data = bytes.fromhex(stdin_hex) if stdin_hex else None
+    return _session.launch(path, args or [], data).to_dict()
 
 
 @mcp.tool()
