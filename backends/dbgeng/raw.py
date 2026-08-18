@@ -10,6 +10,7 @@ abstraction differs, which is exactly the variable the A/B isolates.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -24,7 +25,7 @@ from pybag.dbgeng import core as DbgEng           # noqa: E402
 from pybag.dbgeng.idebugbreakpoint import DebugBreakpoint  # noqa: E402
 
 KEY_REGS = ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip",
-            "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "eflags",
+            "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "efl",
             "cs", "ss", "ds", "es", "fs", "gs"]
 
 
@@ -87,9 +88,7 @@ class RawDbgEng:
     def launch(self, path: str, args: Optional[List[str]] = None) -> dict:
         self._target_path = os.path.abspath(path)
         self._target_args = args or []
-        cmdline = self._target_path
-        if self._target_args:
-            cmdline += " " + " ".join(self._target_args)
+        cmdline = subprocess.list2cmdline([self._target_path] + self._target_args)
         self._last_event = {}
         self._dbg._client.CreateProcess(cmdline, DbgEng.DEBUG_ONLY_THIS_PROCESS | 0x8)
         self._dbg._control.AddEngineOptions(DbgEng.DEBUG_ENGINITIAL_BREAK)

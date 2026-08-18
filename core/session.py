@@ -1,7 +1,8 @@
 """DebugSession — the debugger-agnostic interface every backend implements.
 
-Mirrors the PRD MVP API (10-15 high-quality interfaces), grouped as:
-Session / Execution / Observation / Inspection / Control / State.
+Grouped as: Session / Execution / Observation / Inspection / Control / State.
+This is the contract the MCP layer and CLI talk to; any backend (DbgEng, x64dbg,
+GDB/LLDB via DAP) must implement it.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from .types import (
     BreakpointInfo,
     ExceptionInfo,
     Instruction,
+    Module,
     StateSnapshot,
 )
 
@@ -40,6 +42,10 @@ class DebugSession(ABC):
     @abstractmethod
     def detach(self) -> None:
         """Detach, leaving the debuggee running."""
+
+    @abstractmethod
+    def module_base(self, module: str) -> Module:
+        """Resolve a module by (case-insensitive) basename."""
 
     # -- Execution ---------------------------------------------------------
     @abstractmethod
@@ -69,13 +75,38 @@ class DebugSession(ABC):
         """Read ``size`` bytes of virtual memory at ``address``."""
 
     @abstractmethod
+    def write_memory(self, address: int, data: bytes) -> None:
+        """Write bytes to virtual memory (exploit-dev: patch/verify)."""
+
+    @abstractmethod
+    def get_register(self, name: str) -> int:
+        """Read a single register by name (rax, rcx, rip, ...)."""
+
+    @abstractmethod
+    def set_register(self, name: str, value: int) -> None:
+        """Set a register (exploit-dev: force a control-flow value)."""
+
+    @abstractmethod
+    def search_memory(self, address: int, size: int, pattern: bytes) -> List[int]:
+        """Search [address, address+size) for a byte pattern; return match addrs."""
+
+    @abstractmethod
+    def find_gadget(self, module: str, gadget: List[str], limit: int = 20) -> List[int]:
+        """Find ROP gadget addresses (a sequence of instruction mnemonics)."""
+
+    @abstractmethod
     def disassemble(self, address: int, count: int = 8) -> List[Instruction]:
         """Disassemble ``count`` instructions at ``address``."""
 
     # -- Control -----------------------------------------------------------
     @abstractmethod
-    def breakpoint_add(self, expr: str) -> BreakpointInfo:
-        """Add a breakpoint; ``expr`` is a symbol or ``0xADDR``."""
+    def breakpoint_add(self, expr: str, condition: Optional[str] = None) -> BreakpointInfo:
+        """Add a breakpoint; ``expr`` is a symbol or ``0xADDR``. ``condition`` is
+        an optional DbgEng MASM expression (stop only when true)."""
+
+    @abstractmethod
+    def breakpoint_add_hw(self, address: int, size: int = 8, access: str = "write") -> BreakpointInfo:
+        """Add a hardware watchpoint. access: read | write | execute."""
 
     @abstractmethod
     def breakpoint_remove(self, bp_id: int) -> None:

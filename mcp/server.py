@@ -25,7 +25,7 @@ os.environ["PATH"] = str(ROOT / "vendor" / "dbgeng") + os.pathsep + os.environ.g
 
 from mcp.server import MCPServer                 # noqa: E402
 from backends.dbgeng.adapter import DbgEngAdapter  # noqa: E402
-from benchmarks.exploit_util import asm_x64       # noqa: E402
+from core.assembler import asm_x64                # noqa: E402
 
 mcp = MCPServer("ai-debugger")
 _session = DbgEngAdapter()
@@ -177,6 +177,23 @@ def asm(code: str) -> dict:
     directives (`.string "calc"`, `.byte 0x90`)."""
     b = asm_x64(code)
     return {"hex": b.hex(), "size": len(b)}
+
+
+@mcp.tool()
+@locked
+def search_memory(address: str, size: int, pattern_hex: str) -> dict:
+    """Search [address, address+size) for a byte pattern (hex). Returns match addrs."""
+    matches = _session.search_memory(_addr(address), int(size), bytes.fromhex(pattern_hex))
+    return {"matches": [hex(m) for m in matches]}
+
+
+@mcp.tool()
+@locked
+def find_gadget(module: str, gadget: list, limit: int = 20) -> dict:
+    """Find ROP gadget addresses in a module. `gadget` is a list of instruction
+    mnemonics, e.g. ["pop rdi", "ret"] or ["pop rcx", "pop rdx", "pop r8", "ret"]."""
+    addrs = _session.find_gadget(module, list(gadget), int(limit))
+    return {"gadgets": [hex(a) for a in addrs]}
 
 
 # -- Breakpoints -----------------------------------------------------------

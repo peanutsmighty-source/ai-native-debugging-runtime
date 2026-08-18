@@ -8,6 +8,7 @@ structured Core types and deterministic actions into DbgEng calls.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -38,7 +39,7 @@ EXCEPTION_BREAKPOINT = 0x80000003
 EXCEPTION_SINGLE_STEP = 0x80000004
 
 KEY_REGS = ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip",
-            "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "eflags"]
+            "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "efl"]
 
 
 def _hard_kill(pid: int) -> None:
@@ -91,6 +92,11 @@ class DbgEngAdapter(DebugSession):
             self._last_event["code"] = int(rec.ExceptionCode)
             self._last_event["address"] = int(rec.ExceptionAddress)
             self._last_event["first_chance"] = bool(first_chance)
+            # Tag the initial break once, at event time, so _interpret_event
+            # stays idempotent (it may be re-interpreted by observe()).
+            if self._last_event["code"] == EXCEPTION_BREAKPOINT and self._initial_break_pending:
+                self._last_event["initial_break"] = True
+            self._initial_break_pending = False
             try:
                 self._last_event["params"] = [
                     int(rec.ExceptionInformation[i]) for i in range(2)
@@ -108,9 +114,8 @@ class DbgEngAdapter(DebugSession):
     def launch(self, path: str, args: Optional[List[str]] = None) -> StateSnapshot:
         self._target_path = os.path.abspath(path)
         self._target_args = args or []
-        cmdline = self._target_path
-        if self._target_args:
-            cmdline += " " + " ".join(self._target_args)
+        # Proper Win32 quoting (handles paths/args with spaces or metacharacters).
+        cmdline = subprocess.list2cmdline([self._target_path] + self._target_args)
 
         self._clear_event()
         # DETACHED_PROCESS (0x8) keeps the debuggee from inheriting our std
@@ -198,9 +203,15 @@ class DbgEngAdapter(DebugSession):
 
     def _snapshot(self, include_modules: bool, backtrace_frames: int,
                   disasm_count: int, include_regs: bool = True) -> StateSnapshot:
+        errors: List[str] = []
         pc = int(self._dbg.reg.get_pc())
         sp = int(self._dbg.reg.get_sp())
         reason, exc, bp = self._interpret_event(self._last_event)
+        try:
+            dis = self.disassemble(pc, disasm_count)
+        except BackendError as e:
+            dis = []
+            errors.append(f"disassemble: {e}")
         return StateSnapshot(
             pid=int(self._dbg.pid),
             status=self._dbg.exec_status(),
@@ -208,12 +219,13 @@ class DbgEngAdapter(DebugSession):
             sp=sp,
             symbol_at_pc=self._dbg.get_name_by_offset(pc),
             stop_reason=reason,
-            registers=self._read_regs() if include_regs else {},
-            modules=self._modules() if include_modules else [],
-            backtrace=self._backtrace(backtrace_frames),
+            registers=self._read_regs(errors) if include_regs else {},
+            modules=self._modules(errors) if include_modules else [],
+            backtrace=self._backtrace(backtrace_frames, errors),
             exception=exc,
             breakpoint=bp,
-            disassembly=self.disassemble(pc, disasm_count),
+            disassembly=dis,
+            errors=errors,
         )
 
     def observe(self) -> StateSnapshot:
@@ -261,11 +273,82 @@ class DbgEngAdapter(DebugSession):
                     operands=ins.op_str,
                 ))
                 addr += ins.size
-        except Exception:
-            out = []
+        except Exception as e:
+            raise BackendError(f"disassemble(0x{address:x}) failed: {e}") from e
         return out
 
-    # -- Control -----------------------------------------------------------
+    def search_memory(self, address: int, size: int, pattern: bytes) -> List[int]:
+        """Search [address, address+size) for a byte pattern; return match addrs."""
+        results: List[int] = []
+        if not pattern:
+            return results
+        CHUNK = 0x10000
+        overlap = len(pattern) - 1
+        carry = b""
+        pos = address
+        end = address + size
+        while pos < end:
+            chunk_size = min(CHUNK, end - pos)
+            try:
+                data = self.read_memory(pos, chunk_size)
+            except BackendError:
+                break
+            buf = carry + data
+            idx = 0
+            while True:
+                idx = buf.find(pattern, idx)
+                if idx == -1:
+                    break
+                results.append(pos - len(carry) + idx)
+                idx += 1
+            carry = data[-overlap:] if overlap > 0 else b""
+            pos += chunk_size
+        return results
+
+    def module_base(self, module: str) -> Module:
+        """Resolve a module by (case-insensitive) basename."""
+        target = Path(module).name.lower()
+        for m in self._modules():
+            name = Path(m.name).name.lower()
+            if target == name or target in name:
+                return m
+        raise BackendError(f"module {module!r} not loaded")
+
+    def find_gadget(self, module: str, gadget: List[str], limit: int = 20) -> List[int]:
+        """Find addresses of a ROP gadget sequence (list of instruction mnemonics)
+        inside a module's image."""
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+        m = self.module_base(module)
+        base, size = m.base, m.size
+        if size > 0x800000:
+            size = 0x800000  # cap linear scan at 8MB
+        try:
+            code = self.read_memory(base, size)
+        except BackendError as e:
+            raise BackendError(f"find_gadget: cannot read module image: {e}") from e
+        md = Cs(CS_ARCH_X86, CS_MODE_64)
+        md.skipdata = True
+        insns = list(md.disasm(code, base))
+        n = len(gadget)
+        results: List[int] = []
+        for i in range(len(insns) - n + 1):
+            window = insns[i:i + n]
+            if all(self._match_gadget(spec, ins) for spec, ins in zip(gadget, window)):
+                results.append(window[0].address)
+                if len(results) >= limit:
+                    break
+        return results
+
+    @staticmethod
+    def _match_gadget(spec: str, ins) -> bool:
+        spec = spec.strip().lower()
+        mnem = ins.mnemonic.lower()
+        if spec == "ret":
+            return mnem in ("ret", "retf", "retn")
+        if spec == mnem:
+            return True
+        return f"{mnem} {ins.op_str}".strip().lower() == spec
+
     def breakpoint_add(self, expr: str, condition: Optional[str] = None) -> BreakpointInfo:
         bpid = int(self._dbg.bp(expr))
         if condition:
@@ -305,25 +388,27 @@ class DbgEngAdapter(DebugSession):
         return list(self._bps.values())
 
     # -- helpers -----------------------------------------------------------
-    def _read_regs(self) -> Dict[str, int]:
+    def _read_regs(self, errors: Optional[List[str]] = None) -> Dict[str, int]:
         out: Dict[str, int] = {}
         for r in KEY_REGS:
             try:
                 out[r] = int(self._dbg.reg[r])
-            except Exception:
-                pass
+            except Exception as e:
+                if errors is not None:
+                    errors.append(f"register {r}: {e}")
         return out
 
-    def _modules(self) -> List[Module]:
+    def _modules(self, errors: Optional[List[str]] = None) -> List[Module]:
         mods: List[Module] = []
         try:
             for m in self._dbg.module_list():
                 mods.append(Module(name=m[0][0], base=int(m[1].Base), size=int(m[1].Size)))
-        except Exception:
-            pass
+        except Exception as e:
+            if errors is not None:
+                errors.append(f"modules: {e}")
         return mods
 
-    def _backtrace(self, max_frames: int = 12) -> List[Frame]:
+    def _backtrace(self, max_frames: int = 12, errors: Optional[List[str]] = None) -> List[Frame]:
         frames: List[Frame] = []
         try:
             for f in self._dbg.backtrace_list():
@@ -336,16 +421,20 @@ class DbgEngAdapter(DebugSession):
                     ret=int(f.ReturnOffset),
                     stack=int(f.StackOffset),
                 ))
-        except Exception:
-            pass
+        except Exception as e:
+            if errors is not None:
+                errors.append(f"backtrace: {e}")
         return frames
 
     def _interpret_event(self, ev: Dict):
-        """Map the raw last event to (StopReason, ExceptionInfo|None, BreakpointInfo|None)."""
+        """Map the raw last event to (StopReason, ExceptionInfo|None, BreakpointInfo|None).
+
+        Idempotent: the initial-break tag is stamped at event time in
+        _on_exception, so repeated interpretation yields the same result.
+        """
         if not ev:
             return StopReason.UNKNOWN, None, None
         if ev.get("type") == "breakpoint":
-            self._initial_break_pending = False
             bp = BreakpointInfo(
                 id=int(ev.get("bp_id", -1)),
                 address=int(ev["bp_offset"]) if "bp_offset" in ev else None,
@@ -354,11 +443,9 @@ class DbgEngAdapter(DebugSession):
         if ev.get("type") == "exception":
             code = int(ev.get("code", 0))
             if code == EXCEPTION_BREAKPOINT:
-                # First 0x80000003 after launch/attach is the initial break;
-                # later ones (e.g. RtlpBreakPointHeap) are real breakpoint
-                # exceptions and should surface as EXCEPTION, not INITIAL_BREAK.
-                if self._initial_break_pending:
-                    self._initial_break_pending = False
+                # Tagged initial break (stamped in _on_exception); later
+                # 0x80000003 (e.g. RtlpBreakPointHeap) surfaces as EXCEPTION.
+                if ev.get("initial_break"):
                     return StopReason.INITIAL_BREAK, None, None
                 exc = ExceptionInfo(
                     code=code,
@@ -367,7 +454,6 @@ class DbgEngAdapter(DebugSession):
                     params=list(ev.get("params", [])),
                 )
                 return StopReason.EXCEPTION, exc, None
-            self._initial_break_pending = False
             if code == EXCEPTION_SINGLE_STEP:
                 return StopReason.STEP, None, None
             exc = ExceptionInfo(

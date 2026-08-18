@@ -111,6 +111,7 @@ class StateSnapshot:
     exception: Optional[ExceptionInfo] = None
     breakpoint: Optional[BreakpointInfo] = None
     disassembly: List[Instruction] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = {
@@ -133,4 +134,6 @@ class StateSnapshot:
             d["exception"] = self.exception.to_dict()
         if self.breakpoint is not None:
             d["breakpoint"] = self.breakpoint.to_dict()
+        if self.errors:
+            d["errors"] = self.errors
         return d

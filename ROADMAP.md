@@ -87,6 +87,36 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 | ASLR | 地址随机化 |
 | ROP / gadget | 高级利用：拼接「pop xxx; ret」小片段绕过 DEP |
 
+### 9. 形态决策与架构演进（MCP 优先 + 模块化）
+
+**① MCP 优先（适配各种 agent）**
+
+对外形态固定为 **MCP server**，不绑定任何单一 agent 的原生插件：
+
+- MCP 是行业通用协议，同一套工具能接 Claude Code / Codex / Cursor / DSH / 任意 MCP client
+- 已实证：Python MCP server（`mcp` SDK 2.0）与 DSH 的 Node `dsh-mcp-client`（SDK 1.30）协议互通
+- CLI 作为第二出口（与 MCP 共享同一 Core），供脚本/人工用
+
+**② 模块化拆分（避免臃肿）**
+
+工具目录每次请求都进模型上下文 → 工具越多、schema 越大，token 越贵、模型选错工具几率越高。
+原则：
+
+- **现在 21 个工具，单 server 很清爽，不拆**
+- 臃肿临界点约 **40–50 个工具**；过线后按「关注点 × 使用频率」拆：
+
+| Server | 关注点 | 何时挂载 |
+|--------|--------|---------|
+| `dbg-core` | 会话 + 执行 + 基本观察 | 默认 |
+| `dbg-x` | exploit（write_memory/set_register/asm/gadget/search） | 做 exploit 才挂 |
+| `dbg-mem` | 结构化解析（PE/TEB/异常链/堆） | 深入分析才挂 |
+| `dbg-evt` | 事件订阅/过滤/队列 | 长任务才挂 |
+| `dbg-ttd` | 时间旅行调试 | 复现/回放才挂 |
+
+- 中间态：MCP `tools/list_changed` 懒加载（如 `launch` 之后才暴露 exploit 工具）
+- 核心原则（呼应 PRD）：**不以 Tool 数量为指标**。成熟形态 = 「薄核心 + 按需模块」，
+  不是「塞满 50 个工具的超级插件」
+
 ---
 
 ## 二、进度总览
@@ -138,11 +168,45 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 7. shellcode：x64 栈强制 DEP（DllCharacteristics=0x0160），不能直接跳栈；用 VirtualProtect 的 RWX 缓冲。
 8. shellcode 栈对齐：`and rsp,-0x10` + `sub rsp,0x20`（不是 0x28）；字节用 `asm` 别手写。
 
-## 七、剩余计划（按优先级）
+## 七、成熟度目标与剩余计划
+
+成熟形态 = 「**稳定、可观察、可恢复、可组合**」+ 五原语（State/Observation/Event/Action/Experiment）。
+功能全景（north star），✅已有 / 🔲缺失：
+
+| 能力 | 状态 |
+|------|------|
+| 会话控制（launch/attach/terminate/detach） | ✅ |
+| 执行控制（断点/watchpoint/条件断点/单步） | ✅ |
+| 结构化观察（快照/寄存器/栈/反汇编/停因/异常） | ✅ |
+| 修改注入（write_memory/set_register/asm） | ✅ |
+| **snapshot/restore + 实验原语**（可恢复，试错基石） | 🔲 |
+| **函数调用注入**（远程调 VirtualProtect/VirtualAlloc） | 🔲 |
+| **内存搜索 + gadget 查找** | ✅ |
+| **完整事件集 + 事件队列/订阅** | 🔲 |
+| **结构化解析**（PE/TEB/异常链/堆） | 🔲 |
+| **TTD 时间旅行**（DbgEng 自带，未暴露） | 🔲 |
+| stdin 输入 / 线程枚举 / 源码级调试 | 🔲 |
+| 反反调试（x64dbg 生态才有） | 🔲 |
+
+**成熟度度量：五原语完成度**（比功能清单更本质，回答「离 AI-native runtime 还有多远」）：
+
+| 原语 | 完成度 | 现状 |
+|------|--------|------|
+| State | ✅ | StateSnapshot 结构化快照 |
+| Observation | ✅ | 组合观察（停因/异常/寄存器/栈/反汇编） |
+| Action | ✅ | run/step/breakpoint/write_memory/set_register/asm |
+| **Event** | ⚠️ 半成 | `wait_event` 只回「最后一个回调 dict」，无队列/订阅/过滤，事件会被后续回调覆盖 |
+| **Experiment** | ❌ | `snapshot()` 只是 `observe()` 别名，无 restore / state-diff /「设条件→执行→捕获」 |
+
+**2.5 / 5**。缺口集中在 Event 和 Experiment —— 正是「可恢复、可组合」两性质的落点，
+也是外部 review 独立指出的同一个 gap（「还没完全脱离 debugger MCP 形态」）。
+
+**AI-native 独有层**（区别于普通 debugger）：上下文预算意识（观察瘦身+按需）、结构化语义
+（stop_reason/异常分类而非 raw 数据）、可解释错误、确定性（snapshot/restore）、工具粒度策略。
 
 ### P0 — exploit 调试刚需（下一步先做这个）
-- [ ] **ROP gadget 查找器**：搜 `pop rdi; ret` 等 gadget（ROP 链前置，没有它做不了真 DEP 绕过）
-- [ ] **内存搜索**：在目标内存搜字节/字符串（找字符串地址、gadget 落点）
+- [x] **ROP gadget 查找器**：搜 `pop rdi; ret` 等 gadget（`find_gadget`）
+- [x] **内存搜索**：在目标内存搜字节/字符串（`search_memory`）
 - [ ] **stdin 输入**：`launch` 支持 stdin（现在只有 argv/文件，很多 CTF 题读 stdin）
 - [ ] **线程枚举/切换**：`thread_list`/`set_thread`（解锁 `threads_target` + 多线程目标）
 
