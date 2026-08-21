@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-08-21 — P1 完成：exploit benchmark 从「简化」推到「真绕过」
+
+### 新 exploit 样本（全部端到端验证 + manifest 记录）
+- **uaf_write（UAF→任意写）**：free 后 memcpy 改悬垂堆对象的函数指针 cb（偏移 32），
+  `o->cb()` 跳 win()。关键教训：**exploit 地址必须同会话解析**（进程级 ASLR，跨会话
+  拿到过期基址 → 表现为 `unknown` 极难排查；在初始断点改写 payload 文件绕开）。
+- **rop_target（真 DEP 绕过）**：无 RWX 缓冲、无 win()，唯一出路是 ROP 链 →
+  VirtualProtect(栈页, RWX) → 栈上 shellcode 弹计算器。**DEP 对照实验**：直接 ret2stack
+  是 AV（栈 NX），ROP 后同一地址可执行。踩平：Windows 11 系统 DLL 无 `pop r9;ret`
+  （用 ntdll `pop r9;pop r10;pop r11;ret` 3-pop gadget）；gadget 字节搜索可能落在不可执行页
+  （PE 头区的第一个 `c3`）；链尾插裸 ret 对齐 `rsp%16`；VirtualProtect 序言覆写区
+  （shellcode 放 +0x100）。
+- **fmtstr_target（格式化字符串→函数指针）**：`%hhn` 覆写全局 `g_cb` 低字节
+  （normal_cb/win 同模块只差低字节 → 计数仅 53）。三个真实发现：
+  1. **UCRT 默认禁用 %n 族**（安全缓解），需 `_set_printf_count_output(1)`；
+  2. x64 printf 变参位置（va_list 基址=[调用点 rsp+8]，第 N 个 specifier 读第 N 个变参，
+     地址槽由帧几何决定，断点 dump 实证定位）；
+  3. ucrt `%<w>c` 宽度计数 w≳4000 后异常（w=5000 贡献 0）→ 选小计数目标最稳。
+
+### 其他
+- `threads_target` 端到端验证（AV 写 0x0；入口断点逐线程记录 arg 反查 faulting=worker 3；
+  **engine index 每运行会变，TID 才是稳定标识**）。
+- exploit benchmark 达 **7 个 RCE 样本**（ret2win/fnptr_stack/fnptr_heap/shellcode/uaf_write/
+  rop/fmtstr），manifest 坑清单 1–14。
+- P1 全部完成（ROADMAP 同步）。
+
+---
+
 ## 2026-08-19 — 完成 P0，落地 code review 修复
 
 ### exploit 能力补全（P0 全部完成）

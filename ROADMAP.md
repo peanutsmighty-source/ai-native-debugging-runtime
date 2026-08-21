@@ -210,9 +210,15 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 - [x] **stdin 输入**：`launch(stdin_data)`（headless 句柄重定向，实测 scanf 注入）
 - [x] **线程枚举/切换**：`thread_list`/`set_thread`/`get_thread`（已解锁 `threads_target`）
 
-### P1 — benchmark 补全
-- [ ] 崩溃：`threads_target` 样例已可用（线程枚举已就绪，待跑 benchmark）
-- [ ] exploit：格式化字符串→GOT 覆写、ROP 链（真 DEP 绕过）、UAF→任意写
+### P1 — benchmark 补全 ✅ 全部完成
+- [x] 崩溃：`threads_target` 端到端验证（AV 写 0x0，faulting 线程 = worker id 3，入口断点逐线程
+  记录 `(tid, rcx=arg)` 反查；engine index 每次运行会变，**TID 才是稳定标识**）
+- [x] exploit：**UAF→任意写**（`uaf_write`，cb 偏移 32，`'A'*32+p64(win)`，同会话解析地址绕 ASLR）
+- [x] exploit：**ROP 链 → VirtualProtect → 栈上 shellcode**（`rop_target`，真 DEP 绕过：
+  直接 ret2stack 是 AV，ROP 后同一栈地址可执行 → CalculatorApp 弹出）
+- [x] exploit：**格式化字符串 → 函数指针覆写**（`fmtstr_target`，`%hhn` 写 g_cb 低字节；
+  关键发现：UCRT 默认禁用 %n 族需 `_set_printf_count_output(1)`、va_list 位置、宽度计数阈值）
+- [x] 全部 exploit 样本的地址都在**同一会话内解析**（进程级 ASLR，跨会话拿过期基址必失败）
 
 ### P2 — PRD 验证方法论收尾
 - [ ] 真实 token 计量（DSH 内做不到，需在真 Claude Code 跑 A/B）
