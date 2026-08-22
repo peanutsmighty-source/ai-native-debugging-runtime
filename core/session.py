@@ -78,7 +78,10 @@ class DebugSession(ABC):
     # -- Observation / Event -----------------------------------------------
     @abstractmethod
     def wait_event(self, timeout: float = 10.0) -> dict:
-        """Block until the next debugger event; return a structured Event."""
+        """Event primitive: return queued debugger events (FIFO), blocking up
+        to ``timeout`` seconds for the next one if none are queued. Returns
+        {"events": [...], "waited": bool} — intermediate events (thread
+        create/module load/...) are preserved, not just the stop event."""
 
     @abstractmethod
     def observe(self) -> StateSnapshot:
@@ -133,8 +136,15 @@ class DebugSession(ABC):
 
     # -- State -------------------------------------------------------------
     @abstractmethod
-    def snapshot(self) -> StateSnapshot:
-        """Full current-state snapshot (same as observe, explicit alias)."""
+    def snapshot(self, regions: Optional[List[tuple]] = None) -> dict:
+        """Experiment primitive: capture restorable state (registers of the
+        current thread, optional memory ranges, breakpoints) as a JSON-safe
+        dict. Pass it back to restore()."""
+
+    @abstractmethod
+    def restore(self, snapshot: dict) -> None:
+        """Experiment primitive: best-effort write-back of a snapshot dict
+        (registers, memory ranges, missing breakpoints)."""
 
 
 class BackendError(Exception):

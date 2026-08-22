@@ -17,7 +17,7 @@
 | 7 | heapcorrupt_target.exe | heap corruption | 堆校验断点（调试堆下）| `memset` 溢出 16 字节堆缓冲，损坏相邻块 header；`free` 时 `RtlpCheckBusyBlockTail` 检出。**注意：无调试器时可能不崩（无调试堆），benchmark 均在 DbgEng 下跑** |
 | 8 | condbp_target.exe | 条件断点验证 | 0xC0000005 | 10000 次循环中 i==500 时 `process_item` 解引用 NULL；高效做法是条件断点 |
 | 9 | delayedcrash_target.exe | 启动后延迟崩溃 | 0xC0000005 | Sleep(4s) 后解引用 NULL；崩溃不在启动点 |
-| 10 | threads_target.exe | 多线程状态观察 | 0xC0000005 | 8 个线程中仅 id==3 的线程解引用 NULL，需按线程区分 |
+| 10 | threads_target.exe | 多线程状态观察 | 0xC0000005 | 8 个线程中仅 id==3 的线程解引用 NULL，需按线程区分。**已验证**：崩溃 AV 写 0x0，faulting 线程 pc=`worker+0x36`（`mov [rax],1`），其余线程在 ntdll；worker 入口断点逐线程记录 `(tid, rcx=arg)`，崩溃时反查 faulting tid → arg=3 ✓（注意：engine 线程 index 每次运行会变，**TID 才是稳定标识**） |
 | 11 | unknown_target.exe | 未知 crash 根因 | 0xC0000005 | `table_lookup` 未校验 index，`index*2` 越界读（非明显的 NULL 解引用） |
 
 ## 判定标准（每样例）

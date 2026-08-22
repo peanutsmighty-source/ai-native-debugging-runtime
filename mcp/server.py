@@ -134,11 +134,14 @@ def get_thread() -> dict:
     return {"index": _session.get_thread()}
 
 
-# -- Observation -----------------------------------------------------------
+# -- Observation / Event ---------------------------------------------------
 @mcp.tool()
 @locked
 def wait_event(timeout: float = 10.0) -> dict:
-    """Block until the next debugger event (breakpoint/exception/...)."""
+    """Event primitive: return queued debugger events (FIFO), blocking up to
+    `timeout` seconds for the next one if none are queued. Intermediate events
+    (thread_create/module_load/process_exit/...) are preserved, not just the
+    stop event. Returns {"events": [ {type, seq, ...} ], "waited": bool}."""
     return _session.wait_event(float(timeout))
 
 
@@ -151,9 +154,25 @@ def observe() -> dict:
 
 @mcp.tool()
 @locked
-def snapshot() -> dict:
-    """Full current-state snapshot (registers/modules/stack/disasm)."""
-    return _session.snapshot().to_dict()
+def snapshot(regions: list = None) -> dict:
+    """Experiment primitive: capture restorable state (registers of the
+    current thread, optional memory ranges, breakpoints) as a JSON dict.
+    `regions` = optional list of [address, size] to save memory from.
+    Pass the result to restore()."""
+    regs = []
+    for r in (regions or []):
+        regs.append((_addr(r[0]), int(r[1])))
+    return _session.snapshot(regs or None)
+
+
+@mcp.tool()
+@locked
+def restore(snapshot: dict) -> dict:
+    """Experiment primitive: best-effort write-back of a snapshot captured by
+    snapshot() — restores registers, saved memory ranges and missing
+    breakpoints. Returns {} on success."""
+    _session.restore(snapshot)
+    return {}
 
 
 # -- Inspection ------------------------------------------------------------

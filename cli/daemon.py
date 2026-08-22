@@ -74,7 +74,14 @@ class Daemon:
         if method == "observe":
             return s.observe().to_dict()
         if method == "snapshot":
-            return s.snapshot().to_dict()
+            # Experiment capture: optional [address, size] memory regions.
+            regions = None
+            if p.get("regions"):
+                regions = [(parse_int(r[0]), int(r[1])) for r in p["regions"]]
+            return s.snapshot(regions)
+        if method == "restore":
+            s.restore(p["snapshot"])
+            return {}
         if method == "read_memory":
             data = s.read_memory(parse_int(p["address"]), int(p["size"]))
             return {"hex": data.hex()}

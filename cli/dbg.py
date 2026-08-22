@@ -77,7 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--timeout", type=float, default=10.0)
 
     sub.add_parser("observe", help="structured context for the current stop")
-    sub.add_parser("snapshot", help="full current-state snapshot")
+    sub.add_parser("snapshot", help="Experiment capture (registers/breakpoints)")
+    sub.add_parser("restore", help="restore an Experiment snapshot")
 
     sp = sub.add_parser("memory", help="inspect memory")
     msub = sp.add_subparsers(dest="mem_cmd", required=True)

@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-08-21 — 五原语补齐：Event 队列 + Experiment snapshot/restore（2.5/5 → 4/5）
+
+### Event ⚠️ → ✅（事件队列）
+- 所有调试器事件入 FIFO 队列（带递增 seq）：breakpoint / exception / **thread_create /
+  thread_exit / module_load / module_unload / process_exit**（新增 6 类事件订阅，
+  信息事件返回 `DEBUG_STATUS_NO_CHANGE` 不打断执行，process_exit 停住供观察）。
+- `wait_event` 新契约：按序返回队列事件（不再只回「最后一个回调 dict」）；
+  空队列时真阻塞等待。`run()` 后中间事件全部保留——threads_target 单次 run 队列
+  **12 个事件**（7×thread_create + 3×thread_exit + exception），之前只剩最后一个。
+- `_snapshot` 健壮化：进程已退出时 pc/sp/pid/status 取不到不再抛异常（记录 errors[]）。
+
+### Experiment ❌ → ✅ 基本（snapshot/restore）
+- `snapshot(regions=[(addr,size),...])`：捕获当前线程寄存器 + 指定内存区间 + 断点集，
+  返回 JSON-safe dict。
+- `restore(snapshot)`：best-effort 写回（寄存器先非 rip 后 rip、内存区间、补缺失断点）。
+  实测：改 rax → restore 还原 ✓；写内存 → restore 还原 ✓。Windows 无进程级 checkpoint API，
+  恢复的是 agent 可见状态（寄存器/内存/断点）。
+- MCP 工具：`snapshot`（带 regions 参数）+ 新增 `restore`；CLI daemon/dbg 同步支持。
+
+### 回归
+- ret2win / uaf_write / delayedcrash / threads_target 在新事件处理器下全部通过
+  （新增 module_load 等订阅不改执行语义）。
+
+---
+
 ## 2026-08-21 — P1 完成：exploit benchmark 从「简化」推到「真绕过」
 
 ### 新 exploit 样本（全部端到端验证 + manifest 记录）

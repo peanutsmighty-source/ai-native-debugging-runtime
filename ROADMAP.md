@@ -195,11 +195,11 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 | State | ✅ | StateSnapshot 结构化快照 |
 | Observation | ✅ | 组合观察（停因/异常/寄存器/栈/反汇编） |
 | Action | ✅ | run/step/breakpoint/write_memory/set_register/asm |
-| **Event** | ⚠️ 半成 | `wait_event` 只回「最后一个回调 dict」，无队列/订阅/过滤，事件会被后续回调覆盖 |
-| **Experiment** | ❌ | `snapshot()` 只是 `observe()` 别名，无 restore / state-diff /「设条件→执行→捕获」 |
+| **Event** | ✅ | 事件队列（FIFO + seq）：breakpoint/exception/thread_create/thread_exit/module_load/unload/process_exit 全部入队；`wait_event` 按序返回，中间事件不再被覆盖（threads_target 单次 run 队列 12 事件） |
+| **Experiment** | ✅ 基本 | `snapshot(regions)` 捕获寄存器+内存区间+断点 → `restore()` 写回（best-effort；Windows 无进程级 checkpoint API，恢复的是 agent 可见状态：寄存器/内存/断点） |
 
-**2.5 / 5**。缺口集中在 Event 和 Experiment —— 正是「可恢复、可组合」两性质的落点，
-也是外部 review 独立指出的同一个 gap（「还没完全脱离 debugger MCP 形态」）。
+**4 / 5（+Event 补齐、Experiment 基本可用）**。缺口收窄到 Experiment 的「完整进程状态恢复」
+（需快照 DLL 内存布局/句柄，Windows 无原生 API，用 snapshot/restore + 重启近似）与订阅/过滤。
 
 **AI-native 独有层**（区别于普通 debugger）：上下文预算意识（观察瘦身+按需）、结构化语义
 （stop_reason/异常分类而非 raw 数据）、可解释错误、确定性（snapshot/restore）、工具粒度策略。
@@ -226,7 +226,8 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 
 ### P3 — 架构/长期
 - [ ] x64dbg adapter（加壳/反反调试目标；复用 LyScript/x64dbgpy 桥，不自己写 C++ 插件）
-- [ ] snapshot/restore、Experiment 原语（PRD P1）
+- [x] ~~snapshot/restore、Experiment 原语~~（2026-08-21 完成：Event 队列 + Experiment snapshot/restore，
+  五原语 2.5/5 → 4/5）
 - [ ] pytest 测试套件 + 文档整理
 
 ## 八、文件地图

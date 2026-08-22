@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -70,45 +72,102 @@ class DbgEngAdapter(DebugSession):
         self._bps: Dict[int, BreakpointInfo] = {}
         self._initial_break_pending: bool = False
 
+        # Event queue (Event primitive): every debugger event is enqueued with
+        # a sequence number so run()/wait_event() can observe intermediate
+        # events (thread create, module load, ...) instead of only the last one.
+        self._event_queue: "deque[Dict]" = deque()
+        self._event_lock = threading.Lock()
+        self._event_seq = 0
+
         # Exception-safe event handlers (must NEVER raise — see M1 report).
         self._dbg.events.breakpoint(self._on_breakpoint)
         self._dbg.events.exception(self._on_exception)
+        self._dbg.events.create_thread(self._on_info_event("thread_create"))
+        self._dbg.events.exit_thread(self._on_info_event("thread_exit"))
+        self._dbg.events.module_load(self._on_info_event("module_load"))
+        self._dbg.events.unload_module(self._on_info_event("module_unload"))
+        self._dbg.events.exit_process(self._on_info_event("process_exit", stop=True))
 
     # -- event capture -----------------------------------------------------
+    def _next_seq(self) -> int:
+        with self._event_lock:
+            self._event_seq += 1
+            return self._event_seq
+
+    def _enqueue(self, ev: Dict) -> None:
+        with self._event_lock:
+            self._event_queue.append(ev)
+        self._last_event = ev          # most recent event drives stop_reason
+
+    def _drain_events(self) -> List[Dict]:
+        """Consume and return all currently queued events (FIFO)."""
+        with self._event_lock:
+            out = list(self._event_queue)
+            self._event_queue.clear()
+        return out
+
+    def _on_info_event(self, etype: str, stop: bool = False):
+        """Factory for informational events (thread/module/process-exit).
+
+        Returns DEBUG_STATUS_NO_CHANGE so execution continues through them
+        (they are queued for the Event primitive, not treated as stops),
+        except process_exit which stops so the agent can observe the exit.
+        """
+        def handler(*args):
+            ev: Dict = {"type": etype, "seq": self._next_seq()}
+            try:
+                if etype == "thread_create" and len(args) >= 3:
+                    ev["start_offset"] = hex(int(args[2]))
+                elif etype in ("module_load", "process_create") and len(args) >= 2:
+                    ev["base"] = hex(int(args[1]))
+                    if etype == "module_load" and len(args) >= 5 and args[3]:
+                        ev["name"] = str(args[3])
+                elif etype in ("thread_exit", "process_exit") and len(args) >= 1:
+                    ev["exit_code"] = int(args[0])
+            except Exception as e:
+                ev["handler_error"] = repr(e)
+            self._enqueue(ev)
+            return DbgEng.DEBUG_STATUS_BREAK if stop else DbgEng.DEBUG_STATUS_NO_CHANGE
+        return handler
+
     def _on_breakpoint(self, *args) -> int:
-        self._last_event = {"type": "breakpoint"}
+        ev: Dict = {"type": "breakpoint", "seq": self._next_seq()}
         try:
             bp = DebugBreakpoint(args[0])
-            self._last_event["bp_id"] = int(bp.GetId())
-            self._last_event["bp_offset"] = int(bp.GetOffset())
+            ev["bp_id"] = int(bp.GetId())
+            ev["bp_offset"] = int(bp.GetOffset())
         except Exception as e:
-            self._last_event["handler_error"] = repr(e)
+            ev["handler_error"] = repr(e)
+        self._enqueue(ev)
         return DbgEng.DEBUG_STATUS_BREAK
 
     def _on_exception(self, record, first_chance) -> int:
-        self._last_event = {"type": "exception"}
+        ev: Dict = {"type": "exception", "seq": self._next_seq()}
         try:
             rec = getattr(record, "contents", record)
-            self._last_event["code"] = int(rec.ExceptionCode)
-            self._last_event["address"] = int(rec.ExceptionAddress)
-            self._last_event["first_chance"] = bool(first_chance)
+            ev["code"] = int(rec.ExceptionCode)
+            ev["address"] = int(rec.ExceptionAddress)
+            ev["first_chance"] = bool(first_chance)
             # Tag the initial break once, at event time, so _interpret_event
             # stays idempotent (it may be re-interpreted by observe()).
-            if self._last_event["code"] == EXCEPTION_BREAKPOINT and self._initial_break_pending:
-                self._last_event["initial_break"] = True
+            if ev["code"] == EXCEPTION_BREAKPOINT and self._initial_break_pending:
+                ev["initial_break"] = True
             self._initial_break_pending = False
             try:
-                self._last_event["params"] = [
+                ev["params"] = [
                     int(rec.ExceptionInformation[i]) for i in range(2)
                 ]
             except Exception:
                 pass
         except Exception as e:
-            self._last_event["handler_error"] = repr(e)
+            ev["handler_error"] = repr(e)
+        self._enqueue(ev)
         return DbgEng.DEBUG_STATUS_BREAK
 
     def _clear_event(self) -> None:
         self._last_event = {}
+        with self._event_lock:
+            self._event_queue.clear()
 
     # -- Session -----------------------------------------------------------
     def launch(self, path: str, args: Optional[List[str]] = None,
@@ -243,29 +302,55 @@ class DbgEngAdapter(DebugSession):
 
     # -- Observation / Event -----------------------------------------------
     def wait_event(self, timeout: float = 10.0) -> dict:
-        self._clear_event()
+        """Event primitive: return queued events (FIFO), blocking up to
+        ``timeout`` seconds for the next debugger event if none are queued.
+
+        Returns {"events": [...], "waited": bool} — events are the raw
+        callback dicts (type/seq/code/address/...) in arrival order.
+        """
+        queued = self._drain_events()
+        if queued:
+            return {"events": queued, "waited": False}
         waited = self._dbg.wait(int(timeout))
-        ev = dict(self._last_event)
-        ev["waited"] = bool(waited)
-        return ev
+        queued = self._drain_events()
+        return {"events": queued, "waited": bool(waited)}
 
     def _snapshot(self, include_modules: bool, backtrace_frames: int,
                   disasm_count: int, include_regs: bool = True) -> StateSnapshot:
         errors: List[str] = []
-        pc = int(self._dbg.reg.get_pc())
-        sp = int(self._dbg.reg.get_sp())
+        pc = sp = 0
+        try:
+            pc = int(self._dbg.reg.get_pc())
+        except Exception as e:
+            errors.append(f"pc: {e}")          # process may have exited
+        try:
+            sp = int(self._dbg.reg.get_sp())
+        except Exception as e:
+            errors.append(f"sp: {e}")
         reason, exc, bp = self._interpret_event(self._last_event)
         try:
             dis = self.disassemble(pc, disasm_count)
         except BackendError as e:
             dis = []
             errors.append(f"disassemble: {e}")
+        try:
+            sym = self._dbg.get_name_by_offset(pc) if pc else None
+        except Exception:
+            sym = None
+        try:
+            status = self._dbg.exec_status()
+        except Exception:
+            status = None
+        try:
+            pid = int(self._dbg.pid)
+        except Exception:
+            pid = None
         return StateSnapshot(
-            pid=int(self._dbg.pid),
-            status=self._dbg.exec_status(),
+            pid=pid,
+            status=status,
             pc=pc,
             sp=sp,
-            symbol_at_pc=self._dbg.get_name_by_offset(pc),
+            symbol_at_pc=sym,
             stop_reason=reason,
             registers=self._read_regs(errors) if include_regs else {},
             modules=self._modules(errors) if include_modules else [],
@@ -280,8 +365,78 @@ class DbgEngAdapter(DebugSession):
         # Full context, on demand: modules + 6-frame backtrace + 4 insns.
         return self._snapshot(True, 6, 4)
 
-    def snapshot(self) -> StateSnapshot:
-        return self.observe()
+    # -- Experiment (snapshot / restore) ------------------------------------
+    def snapshot(self, regions: Optional[List[tuple]] = None) -> dict:
+        """Experiment primitive: capture restorable state.
+
+        ``regions`` = optional list of (address, size) memory ranges to save
+        along with the register file (current thread) and breakpoint set.
+        Returns a JSON-safe dict; pass it back to restore().
+        """
+        regs = self._read_regs()
+        mem = []
+        for addr, size in (regions or []):
+            try:
+                data = self.read_memory(int(addr), int(size))
+                mem.append({
+                    "address": hex(int(addr)),
+                    "size": int(size),
+                    "data": data.hex(),
+                })
+            except BackendError:
+                pass   # unmapped region: skip silently
+        bps = [
+            {"id": b.id, "address": hex(b.address) if b.address else None,
+             "symbol": b.symbol}
+            for b in self._bps.values()
+        ]
+        snap: Dict = {
+            "pid": int(self._dbg.pid),
+            "thread": self.get_thread(),
+            "registers": {k: hex(v) for k, v in regs.items()},
+            "memory": mem,
+            "breakpoints": bps,
+        }
+        try:
+            snap["pc"] = hex(int(self._dbg.reg.get_pc()))
+            snap["sp"] = hex(int(self._dbg.reg.get_sp()))
+        except Exception:
+            pass
+        return snap
+
+    def restore(self, snap: dict) -> None:
+        """Experiment primitive: write back a snapshot captured by snapshot().
+
+        Best-effort: restores registers (current thread), saved memory ranges
+        and re-adds missing breakpoints. A full process checkpoint is not
+        possible on Windows; this restores the agent-visible state.
+        """
+        if not isinstance(snap, dict):
+            raise BackendError("restore() expects a snapshot dict from snapshot()")
+        if "registers" in snap:
+            regs = snap["registers"]
+            # non-rip first, rip last (rip steers execution).
+            order = [r for r in KEY_REGS if r in regs and r != "rip"]
+            if "rip" in regs:
+                order.append("rip")
+            for r in order:
+                try:
+                    self.set_register(r, int(regs[r], 16))
+                except Exception:
+                    pass
+        for m in snap.get("memory", []):
+            try:
+                self.write_memory(int(m["address"], 16), bytes.fromhex(m["data"]))
+            except Exception:
+                pass
+        existing = {b.address for b in self._bps.values()}
+        for b in snap.get("breakpoints", []):
+            addr = b.get("address")
+            if addr and int(addr, 16) not in existing:
+                try:
+                    self.breakpoint_add("0x%x" % int(addr, 16))
+                except Exception:
+                    pass
 
     # -- Inspection --------------------------------------------------------
     def read_memory(self, address: int, size: int) -> bytes:
