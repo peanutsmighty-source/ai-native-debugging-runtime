@@ -221,7 +221,14 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 - [x] 全部 exploit 样本的地址都在**同一会话内解析**（进程级 ASLR，跨会话拿过期基址必失败）
 
 ### P2 — PRD 验证方法论收尾
-- [ ] 真实 token 计量（DSH 内做不到，需在真 Claude Code 跑 A/B）
+- [x] ~~真实 token 计量（DSH 内做不到）~~ **纠正**（2026-08-22）：DSH 的 UI 底部 token 来自
+  `@deepseek-ai/dsh-token-meter`（Cordis 服务 `ctx.tokenMeter`），数据源是持久化的
+  session 事件流 `~/.dsh/sessions/<workspace>/session-<uuid>/session.jsonl.zstd` 里
+  `assistant/message` 的 provider `usage`（input/output/reasoning/cacheRead）。
+  agent 工具面虽不暴露（tool_stats 无 token；cordis_inspect_query 不能调业务方法），
+  但日志可解析 → `scripts/session_tokens.py` 已落地，token 计量在 DSH 内可行。
+  剩余：跨模型对照（Claude Code）仍需外部环境；同模型（deepseek-v4-flash）下
+  「高层 vs 低层接口」对照可在 DSH 内用两个 subagent + 各自 session 计量完成。
 - [ ] 真 x64dbg MCP 对照组（现在用「同后端低层 raw」代理；需先无头化 x64dbg）
 
 ### P3 — 架构/长期
