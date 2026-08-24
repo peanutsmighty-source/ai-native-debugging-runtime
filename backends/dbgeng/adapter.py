@@ -307,13 +307,26 @@ class DbgEngAdapter(DebugSession):
 
         Returns {"events": [...], "waited": bool} — events are the raw
         callback dicts (type/seq/code/address/...) in arrival order.
+        ``waited`` is True when the call blocked and then saw new events,
+        False when events were already queued or the timeout elapsed.
         """
+        import time
         queued = self._drain_events()
         if queued:
             return {"events": queued, "waited": False}
-        waited = self._dbg.wait(int(timeout))
-        queued = self._drain_events()
-        return {"events": queued, "waited": bool(waited)}
+        deadline = time.monotonic() + float(timeout)
+        while True:
+            # Poll with plain sleeps: calling DbgEng's WaitForEvent while the
+            # engine is idle (already stopped) corrupts its internal symbol /
+            # event state (subsequent symbol() calls start returning -1).
+            # run()/go() is synchronous, so events always arrive while it
+            # blocks; an idle wait_event only needs to drain them.
+            time.sleep(0.05)
+            queued = self._drain_events()
+            if queued:
+                return {"events": queued, "waited": True}
+            if time.monotonic() >= deadline:
+                return {"events": [], "waited": False}
 
     def _snapshot(self, include_modules: bool, backtrace_frames: int,
                   disasm_count: int, include_regs: bool = True) -> StateSnapshot:
@@ -561,9 +574,16 @@ class DbgEngAdapter(DebugSession):
             bp.SetCommand((".if (%s) {} .else {gc}" % condition).encode())
         addr = None
         try:
-            addr = self._dbg.symbol(expr)
+            # A bare 0x... expression is already an absolute address; symbol()
+            # would fail on it (returns -1), so parse it directly.
+            addr = int(expr, 16) if str(expr).lower().startswith("0x") else None
         except Exception:
             addr = None
+        if addr is None:
+            try:
+                addr = self._dbg.symbol(expr)
+            except Exception:
+                addr = None
         info = BreakpointInfo(id=bpid, address=addr, symbol=expr)
         self._bps[bpid] = info
         return info

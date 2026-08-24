@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-08-22 — pytest 测试套件（42 测试全绿）+ token 计量工具
+
+### 测试套件（tests/，`python -m pytest` 72s 全绿）
+- **test_session（14）**：生命周期（launch/terminate/restart/新 PID）、run 结构化异常、
+  lean after-state、observe 全量、断点（符号+条件）、内存/寄存器往返、反汇编/搜索、
+  step、stdin 注入。
+- **test_events（5）**：Event 队列（launch 排队 initial_break+module_load、空队列真阻塞、
+  run 后事件顺序+seq 递增、threads_target 8×thread_create、process_exit）。
+- **test_experiment（5）**：snapshot/restore 寄存器/内存/断点往返、崩溃后快照、JSON 序列化。
+- **test_exploits_simple（5）**：ret2win / fnptr_stack / fnptr_heap / uaf_write 命中 win()。
+- **test_exploits_advanced（3）**：shellcode（RWX g_exec→WinExec 断点）、ROP 真 DEP 绕过
+  （链→VirtualProtect→栈 shellcode→WinExec 断点）、fmtstr %hhn 覆写 g_cb→win。均停在
+  WinExec **入口**断点，不真弹计算器。
+- **test_crash_benchmarks（10）**：7 个崩溃样本 ground truth（异常码/符号/回溯）、
+  threads 线程识别（入口断点反查 worker id=3）、条件断点、栈溢出 0xC00000FD。
+
+### 测试暴露并修出的核心 bug
+- **`wait_event` 空闲轮询破坏 DbgEng**：空队列轮询里反复调 WaitForEvent（空闲引擎立即
+  返回），会损坏符号解析状态（之后 symbol() 全返回 -1）→ 改为纯 sleep 轮询（run 是同步
+  阻塞的，事件必然在返回时已入队）。
+- **`breakpoint_add("0x...")` 的 address=-1**：symbol() 对纯地址表达式失败 → 直接解析 0x
+  前缀地址。
+
+### token 计量工具（P2 修正的落地）
+- `scripts/session_tokens.py`：解析 `~/.dsh/sessions/.../session.jsonl.zstd` 的 provider
+  usage（input/output/reasoning/cacheRead）——UI 底部 token 的 agent 侧复现。
+- `scripts/ab_measure.py` / `scripts/ab_split.py`：A/B 会话计量与按事件 seq 切分。
+- 结论修正：subagent 独立 A/B 因 DSH 路由到不可用端点 openai/gpt-5.6-sol 不可执行；
+  第三轮为同会话双阶段**方向性观察**（任务不同+观察者效应，非严格对照），ab_results.md 已降级。
+
+---
+
 ## 2026-08-21 — 五原语补齐：Event 队列 + Experiment snapshot/restore（2.5/5 → 4/5）
 
 ### Event ⚠️ → ✅（事件队列）

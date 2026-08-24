@@ -235,7 +235,11 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 - [ ] x64dbg adapter（加壳/反反调试目标；复用 LyScript/x64dbgpy 桥，不自己写 C++ 插件）
 - [x] ~~snapshot/restore、Experiment 原语~~（2026-08-21 完成：Event 队列 + Experiment snapshot/restore，
   五原语 2.5/5 → 4/5）
-- [ ] pytest 测试套件 + 文档整理
+- [x] ~~pytest 测试套件~~（2026-08-22 完成：**42 个测试全绿，72s**——session 生命周期/五原语、
+  Event 队列语义、snapshot-restore 往返、5 个简单 RCE + 3 个高级 exploit（shellcode/ROP DEP
+  绕过/fmtstr）、10 个崩溃 benchmark ground truth（含 threads 线程识别、条件断点、栈溢出）。
+  单例 adapter fixture（pybag 每进程仅一个可用 adapter）；顺带修出 2 个核心 bug：
+  `wait_event` 空闲轮询破坏 DbgEng 符号状态、`breakpoint_add` 对 0x 地址的 address 解析）
 
 ## 八、文件地图
 
