@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-08-22 — 第二后端 GdbAdapter：跨后端抽象验证成功
+
+### 核心成果
+同一套 pytest（`tests/`）**双后端跑通**：
+- **DbgEng：42/42 通过**（74s）
+- **GDB：38 通过 / 4 skip / 0 失败**（43s；skip = shellcode/ROP/fmtstr 三个 DbgEng
+  专项 exploit + 条件断点）
+
+这是「debugger-agnostic 接口」的最硬证据：核心契约（session 生命周期/五原语/事件队列/
+snapshot-restore）、11 个崩溃定位 ground truth（含 threads 线程识别、栈溢出）、
+**5 个 simple exploit（ret2win/fnptr×2/uaf_write 漏洞利用）**全部跨 DbgEng 与 gdb 成立。
+
+### GdbAdapter（backends/gdb/adapter.py）
+- 基于 gdb 17.1（mingw-w64 自带）的 **MI2 协议**，长驻交互进程驱动，无 DbgEng 的
+  pybag 单例限制（每测试全新 gdb 进程）。
+- DWARF 符号（比 DbgEng export-only 更全，能看到 main 等非导出函数）。
+- 踩平：MI exec 异步（`*stopped` 在 prompt 后到达 → `_mi_exec` 读到 stopped）、
+  Windows PE 上寄存器名表只有 32 位名（改用 `info registers` CLI 解析）、
+  `-break-insert` 裸地址需 `*0xADDR`、`find` 多字节模式逗号分隔、主程序基址从
+  `info files` 的 .text 推导、`info proc` 在 Windows 不支持（pid 从
+  `=thread-group-started` 事件缓存）。
+
+### 接口扩展
+- `DebugSession.resolve_symbol(expr) -> Optional[int]`（后端无关的符号解析，
+  DbgEng=exports / gdb=DWARF），exploit 测试从 `_dbg.symbol` 改为公开接口。
+- 测试断言后端无关化：断点命中"win 附近"（gdb 跳 prologue +8）、AV params 条件化
+  （DbgEng 专属增强）、stack overflow code 双值（gdb 报 SIGSEGV）、事件 initial_break
+  标记跨事件类型。
+
+### 备注
+- benchmark 目标编译加 `-g`（gdb 符号更全；DbgEng 不受影响）。
+- 每测试全新 gdb 进程消除顺序污染（gdb 无 DbgEng 的单例限制）。
+
+---
+
 ## 2026-08-22 — pytest 测试套件（42 测试全绿）+ token 计量工具
 
 ### 测试套件（tests/，`python -m pytest` 72s 全绿）

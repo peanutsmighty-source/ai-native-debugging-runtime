@@ -232,15 +232,11 @@ AI Agent（Claude Code / Codex / Cursor / DSH）
 - [ ] 真 x64dbg MCP 对照组（现在用「同后端低层 raw」代理；需先无头化 x64dbg）
 
 ### P3 — 架构/长期
-- [ ] **第二后端：GDB/DAP adapter**（2026-08-22 调研 pivot：x64dbg 降级，GDB 优先）
-  - 调研结论：x64dbg 未装、无头化+桥接成本高（M1 论证脆）；**gdb 17.1 已在本机**
-    （mingw-w64 自带），原生 CLI + 官方 DAP（gdb 17 特性），DWARF 符号完整
-    （比 DbgEng export-only 强）。实测 gdb 批处理模式完整调试 crash_target
-    （SIGSEGV 捕获、crash_here/main 符号、寄存器/回溯）。
-  - 路线：实现 `DebugSession` 的 GDB 后端 → 复用 42 个 pytest 跑新后端 =
-    跨后端抽象最硬验证。DAP adapter 顺带可对接 lldb/gdb remote 等。
+- [x] **第二后端：GDB/DAP adapter**（2026-08-22 完成：`backends/gdb/adapter.py`，
+  gdb 17.1 MI2 协议。**同一套 pytest 双后端跑通：DbgEng 42/42、gdb 38 过/4 skip**——
+  跨后端抽象成立。skip = 3 个 DbgEng 专项 exploit + 条件断点）
 - [ ] x64dbg adapter（**降级为反反调试专项**：加壳/反反调试目标才需要，x64dbg 无头化
-  成本高、价值窄；等跨后端抽象验证后再做）
+  成本高、价值窄；跨后端抽象已由 gdb 验证，x64dbg 纯属场景扩展）
 - [x] ~~snapshot/restore、Experiment 原语~~（2026-08-21 完成：Event 队列 + Experiment snapshot/restore，
   五原语 2.5/5 → 4/5）
 - [x] ~~pytest 测试套件~~（2026-08-22 完成：**42 个测试全绿，72s**——session 生命周期/五原语、
