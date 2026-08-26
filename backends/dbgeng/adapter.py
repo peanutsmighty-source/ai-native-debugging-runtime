@@ -472,6 +472,15 @@ class DbgEngAdapter(DebugSession):
         """Set a register (exploit-dev: force a control-flow value to test a hypothesis)."""
         self._dbg.reg[name] = int(value)
 
+    def resolve_symbol(self, expr: str) -> Optional[int]:
+        """Resolve `mod!name` (or a bare name) to an address via the PE export
+        table; None when unresolved."""
+        try:
+            addr = int(self._dbg.symbol(expr))
+            return addr if addr != -1 else None
+        except Exception:
+            return None
+
     def disassemble(self, address: int, count: int = 8) -> List[Instruction]:
         out: List[Instruction] = []
         addr = address

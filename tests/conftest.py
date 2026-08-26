@@ -19,7 +19,16 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backends.dbgeng.adapter import DbgEngAdapter  # noqa: E402
+# Backend selection: DSH_TEST_BACKEND=dbgeng (default) | gdb
+BACKEND = os.environ.get("DSH_TEST_BACKEND", "dbgeng")
+if BACKEND == "gdb":
+    from backends.gdb.adapter import GdbAdapter as AdapterCls
+else:
+    from backends.dbgeng.adapter import DbgEngAdapter as AdapterCls
+
+# Marker for tests that exercise DbgEng-specific capabilities.
+dbgeng_only = pytest.mark.skipif(BACKEND == "gdb",
+                                 reason="DbgEng-specific capability (ROP gadget scan / condition syntax)")
 
 TARGETS = PROJECT_ROOT / "benchmarks" / "targets"
 EXPLOITS = PROJECT_ROOT / "benchmarks" / "exploit_targets"
@@ -39,7 +48,7 @@ def _compile_all():
         for c in src_dir.glob("*.c"):
             exe = src_dir / (c.stem + ".exe")
             if not exe.exists():
-                r = subprocess.run([str(gcc), "-O0", "-o", str(exe), str(c)],
+                r = subprocess.run([str(gcc), "-O0", "-g", "-o", str(exe), str(c)],
                                    capture_output=True, text=True)
                 if r.returncode != 0:
                     raise RuntimeError(f"compile {c.name} failed: {r.stderr}")
@@ -50,26 +59,43 @@ def _ensure_targets():
     _compile_all()
 
 
-@pytest.fixture(scope="session")
-def adapter():
-    """The single DbgEngAdapter shared by the whole suite (pybag limit)."""
-    a = DbgEngAdapter()
-    yield a
-    try:
-        a.terminate()
-    except Exception:
-        pass
-    try:
-        a._release()
-    except Exception:
-        pass
-    # shellcode/ROP tests may have spawned CalculatorApp — clean up.
-    try:
-        subprocess.run(["powershell", "-Command",
-                        "Stop-Process -Name CalculatorApp -Force -ErrorAction SilentlyContinue"],
-                       capture_output=True)
-    except Exception:
-        pass
+if BACKEND == "gdb":
+    @pytest.fixture()
+    def adapter():
+        """gdb backend: one fresh gdb process per test (no singleton limit,
+        and fully independent state kills cross-test pollution)."""
+        a = AdapterCls()
+        yield a
+        try:
+            a._release()
+        except Exception:
+            pass
+else:
+    @pytest.fixture(scope="session")
+    def adapter():
+        """The single DbgEngAdapter shared by the whole suite.
+
+        pybag allows only ONE working adapter per process (verified: a second
+        DbgEngAdapter breaks symbol resolution), so a session-scoped singleton
+        is mandatory.
+        """
+        a = AdapterCls()
+        yield a
+        try:
+            a.terminate()
+        except Exception:
+            pass
+        try:
+            a._release()
+        except Exception:
+            pass
+        # shellcode/ROP tests may have spawned CalculatorApp — clean up.
+        try:
+            subprocess.run(["powershell", "-Command",
+                            "Stop-Process -Name CalculatorApp -Force -ErrorAction SilentlyContinue"],
+                           capture_output=True)
+        except Exception:
+            pass
 
 
 @pytest.fixture()

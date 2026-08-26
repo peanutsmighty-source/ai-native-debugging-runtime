@@ -116,6 +116,11 @@ class DebugSession(ABC):
     def disassemble(self, address: int, count: int = 8) -> List[Instruction]:
         """Disassemble ``count`` instructions at ``address``."""
 
+    @abstractmethod
+    def resolve_symbol(self, expr: str) -> Optional[int]:
+        """Resolve a symbol (`mod!name` or DWARF `name`) to its address, or
+        None when unresolved. Backend-agnostic (exports / DWARF / PDB)."""
+
     # -- Control -----------------------------------------------------------
     @abstractmethod
     def breakpoint_add(self, expr: str, condition: Optional[str] = None) -> BreakpointInfo:

@@ -15,11 +15,11 @@ def test_launch_queues_initial_break_and_modules(fresh, adapter):
     r = adapter.wait_event(0.5)
     assert r["waited"] is False          # events already queued
     types = [e["type"] for e in r["events"]]
-    assert "exception" in types          # initial break is an exception event
-    assert any("initial_break" in e and e["initial_break"] for e in r["events"]
-               if e["type"] == "exception"), "initial break must be tagged"
-    # module loads occur before the initial break on a fresh launch
     assert "module_load" in types
+    # initial break is tagged on its event (exception for DbgEng 0x80000003,
+    # breakpoint-hit for gdb tbreak main) — backend-specific but must exist
+    assert any(e.get("initial_break") for e in r["events"]), \
+        "initial break must be tagged on its event"
 
 
 def test_wait_event_blocks_when_empty(fresh, adapter):

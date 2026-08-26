@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import pytest  # noqa: E402
-from conftest import target_path  # noqa: E402
+from conftest import dbgeng_only, target_path  # noqa: E402
 
 EXC_AV = 0xC0000005
 EXC_STACK_OVERFLOW = 0xC00000FD
@@ -51,8 +51,8 @@ def test_threads_target_faulting_thread_is_worker3(fresh, adapter):
     """Ground truth: only worker id==3 NULL-derefs; verify via entry bp + arg."""
     fresh("threads_target")
     adapter.wait_event(0.2)
-    worker = adapter._dbg.symbol("threads_target!worker")
-    assert worker != -1
+    worker = adapter.resolve_symbol("threads_target!worker")
+    assert worker is not None
     adapter.breakpoint_add(worker)
     entered = {}
     seen = 0
@@ -77,9 +77,10 @@ def test_threads_target_faulting_thread_is_worker3(fresh, adapter):
     assert entered[fault_tid] == 3, f"faulting worker arg={entered[fault_tid]} want 3"
 
 
+@dbgeng_only
 def test_condbp_condition_stops_at_500(fresh, adapter):
     """condbp_target: NULL deref only when i==500; conditional bp should stop
-    exactly there instead of running to the crash."""
+    exactly there instead of running to the crash (DbgEng MASM condition)."""
     fresh("condbp_target")
     adapter.wait_event(0.2)
     process_item = adapter._dbg.symbol("condbp_target!process_item")
@@ -103,4 +104,6 @@ def test_stack_target_stack_overflow(fresh, adapter):
     fresh("stack_target")
     snap = adapter.run(20)
     assert snap.stop_reason.value == "exception"
-    assert snap.exception.code == EXC_STACK_OVERFLOW, hex(snap.exception.code)
+    # DbgEng reports STATUS_STACK_OVERFLOW (0xC00000FD); gdb maps the same
+    # fault to SIGSEGV (0xC0000005) — either is a correct crash observation.
+    assert snap.exception.code in (EXC_STACK_OVERFLOW, EXC_AV), hex(snap.exception.code)
